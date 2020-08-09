@@ -1,12 +1,33 @@
 #!/bin/sh
 
+# !!! RUN THIS SCRIPT UNDER VIRTUALENV !!!
+# need to run the following commands before running this release script
+# (This is for macOS, and for python virtualenv is recommended)
+# --------
+# brew install pandoc
+# pip3 install pandoc pypandoc twine pyflakes
+
+### Usage ###
+# - Testing: ./release.sh -buti
+# - Actual: ./release.sh -abigtu
+
 #set -o errexit
 #set -x
 
 trap "echo '=== Release script interrupted ==='; exit -1" SIGINT
 
-py2venv=${py2venv-"$HOME/Documents/t/pyvenv/2.7.16"}
-py3venv=${py3venv-"$HOME/Documents/t/pyvenv/3.7.3"}
+check() {
+	command -v "$1" || { echo "'$1' doesn't exist, aborting."; exit -1; }
+}
+
+check git
+check python
+check pandoc
+check pyflakes
+check twine
+check jq
+
+pycmd=python
 
 actual=0
 build=0
@@ -14,18 +35,6 @@ install=0
 upload=0
 testit=0
 tagit=0
-
-createvenv() {
-	if [ ! -d "$py2venv" ]
-	then
-		python2 -m virtualenv "$py2venv"
-	fi
-
-	if [ ! -d "$py3venv" ]
-	then
-		python3 -m virtualenv "$py3venv"
-	fi
-}
 
 parsearg() {
 	while getopts "abigtu" opt; do
@@ -52,14 +61,15 @@ parsearg() {
 	done
 }
 
-doctest() {
-	eval $1 -m pyflakes bypy
-	eval $1 setup.py test
-	#eval $1 -m doctest -v bypy.py
+runtest() {
+	eval $pycmd -m pyflakes bypy
+	eval $pycmd setup.py test
+	#eval $pycmd -m doctest -v bypy.py
+	eval $pycmd -m bypy -V
+	eval $pycmd -m bypy --config-dir bypy/test/configdir quota
 }
 
 installtest() {
-	. "$1"
 	# due to requests not in testpypi
 	if [ $actual -eq 0 ]
 	then
@@ -70,16 +80,12 @@ installtest() {
 	pip uninstall -y bypy
 	pip install -U bypy $indexopt
 	bypy -V
-	bypy quota
-	deactivate
+	bypy --config-dir bypy/test/configdir quota
 }
 
 main() {
-	#if [ ! -f 'HISTORY.rst' ]; then
-	#	python genrst.py
-	#fi
-	python genrst.py
-	createvenv
+	./syncver.sh
+	eval $pycmd genrst.py
 	parsearg $*
 
 	if [ "$actual" -eq 0 ]
@@ -103,14 +109,13 @@ main() {
 
 	if [ "$testit" -eq 1 ]
 	then
-		doctest python2
-		doctest python3
+		runtest
 	fi
 
 	if [ "$build" -eq 1 ]
 	then
 		rm -Rf dist/*
-		python setup.py bdist_wheel #sdist
+		eval $pycmd setup.py bdist_wheel #sdist
 	fi
 
 	uploadcmd="twine upload dist/* $repoopt"
@@ -123,8 +128,7 @@ main() {
 
 	if [ "$install" -eq 1 ]
 	then
-		installtest "$py2venv/bin/activate"
-		installtest "$py3venv/bin/activate"
+		installtest
 	fi
 }
 

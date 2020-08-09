@@ -478,33 +478,38 @@ class ByPy(object):
 				check_update = True
 
 		if check_update:
-			r = requests.get('https://raw.githubusercontent.com/houtianze/bypy/master/update/update.json')
-			if r.status_code == 200:
-				try:
-					j = r.json()
-					min_ver_key = 'minimumRequiredVersion'
-					if min_ver_key in j:
-						minver = j[min_ver_key]
-						if comp_semver(const.__version__, minver) < 0:
-							perr("Your current version ({}) is too low, "
-								"minimum required version is {}.\n"
-								"Please run 'pip install -U bypy' to update and try again.".format(
-									const.__version__, minver))
-							sys.exit(const.EUpdateNeeded)
-						else:
-							self.__setting[const.SettingKey_LastUpdateCheckTime] = nowsec
-							self.savesetting()
+			try:
+				r = requests.get('https://raw.githubusercontent.com/houtianze/bypy/master/update/update.json')
+				if r.status_code == 200:
+					try:
+						j = r.json()
+						min_ver_key = 'minimumRequiredVersion'
+						if min_ver_key in j:
+							minver = j[min_ver_key]
+							if comp_semver(const.__version__, minver) < 0:
+								perr("Your current version ({}) is too low, "
+									"minimum required version is {}.\n"
+									"Please run 'pip install -U bypy' to update and try again.".format(
+										const.__version__, minver))
+								sys.exit(const.EUpdateNeeded)
+							else:
+								self.__setting[const.SettingKey_LastUpdateCheckTime] = nowsec
+								self.savesetting()
 
-					recommended_ver_key = 'recommendedVersion'
-					if recommended_ver_key in j:
-						recver = j[recommended_ver_key]
-						if comp_semver(const.__version__, recver) < 0:
-							pr("Your current version ({}) is low, "
-								"It's recommended to update to version {}.\n"
-								"Please run 'pip install -U bypy' to update.".format(
-									const.__version__, recver))
-				except ValueError:
-					self.pd("Invalid response for update check, skipping.")
+						recommended_ver_key = 'recommendedVersion'
+						if recommended_ver_key in j:
+							recver = j[recommended_ver_key]
+							if comp_semver(const.__version__, recver) < 0:
+								pr("Your current version ({}) is low, "
+									"It's recommended to update to version {}.\n"
+									"Please run 'pip install -U bypy' to update.".format(
+										const.__version__, recver))
+					except ValueError:
+						self.pd("Invalid response for update check, skipping.")
+				else:
+					self.pd("HTTP Status {} while checking update, skipping.".format(r.status_code))
+			except:
+				self.pd("Error occurred while checking update, skipping.")
 
 	def pv(self, msg, **kwargs):
 		if self.verbose:
@@ -976,6 +981,21 @@ Possible fixes:
 	def __repr_timeout(self):
 		return self.__timeout if self.__timeout else 'infinite'
 
+	def __update_auth_server_list(self):
+		try:
+			r = requests.get('https://raw.githubusercontent.com/houtianze/bypy/master/update/auth.json')
+			if r.status_code == 200:
+				try:
+					j = r.json()
+					const.AuthServerList = j['AuthServerList']
+					const.RefreshServerList = j['RefreshServerList']
+				except ValueError:
+					self.pd("Invalid response for auth servers update, skipping.")
+			else:
+				self.pd("HTTP Status {} while updating auth servers, skipping.".format(r.status_code))
+		except:
+			self.pd("Error occurred while updating auth servers, skipping.")
+
 	def __server_auth(self):
 		params = {
 			'client_id' : self.__apikey,
@@ -1000,6 +1020,8 @@ Possible fixes:
 		savedperr = perr
 		if not self.debug:
 			perr = nop
+
+		self.__update_auth_server_list()
 		for auth in const.AuthServerList:
 			(url, retry, msg) = auth
 			pr(msg)
@@ -1078,6 +1100,7 @@ Possible fixes:
 			savedperr = perr
 			if not self.debug:
 				perr = nop
+			self.__update_auth_server_list()
 			for refresh in const.RefreshServerList:
 				(url, retry, msg) = refresh
 				pr(msg)
@@ -1234,12 +1257,12 @@ Possible fixes:
 
 	def __get_file_info_act(self, r, args):
 		try:
-			remotefile = args
+			(remotefile, rjlist) = args
 			j = r.json()
 			self.jsonq.append(j)
 			self.pd("List json: {}".format(j))
-			l = j['list']
-			for f in l:
+			rjlist = j['list']
+			for f in rjlist:
 				if f['path'] == remotefile: # case-sensitive
 					self.__remote_json = f
 					self.pd("File info json: {}".format(self.__remote_json))
@@ -1272,13 +1295,20 @@ Possible fixes:
 		rdir, rfile = posixpath.split(remotefile)
 		self.pd("__get_file_info(): rdir : {} | rfile: {}".format(rdir, rfile))
 		if rdir and rfile:
-			pars = {
-				'method' : 'list',
-				'path' : rdir,
-				'by' : 'name', # sort in case we can use binary-search, etc in the futrue.
-				'order' : 'asc' }
-
-			return self.__get(pcsurl + 'file', pars, self.__get_file_info_act, remotefile, **kwargs)
+			listStart = 0
+			while True:
+				pars = {
+					'method' : 'list',
+					'path' : rdir,
+					'by' : 'name', # sort in case we can use binary-search, etc in the futrue.
+					'order' : 'asc',
+					'limit': '{}-{}'.format(listStart, listStart + const.MaxListEntries)}
+				rjlist = []
+				result = self.__get(pcsurl + 'file', pars, self.__get_file_info_act, (remotefile, rjlist), **kwargs)
+				if result == const.ENoError or (not rjlist or len(rjlist) < const.MaxListEntries):
+					break
+				listStart += const.MaxListEntries
+			return result
 		else:
 			perr("Invalid remotefile '{}' specified.".format(remotefile))
 			return const.EArgument
@@ -2567,6 +2597,15 @@ restore a file from the recycle bin
 			self.__remote_dir_contents.get(remotepath[rootlen:]).add(
 				d['path'][dlen:], PathDictTree('D', size = d['size'], md5 = d['md5'] if 'md5' in d else ''))
 
+		# Baidu made another fuck up here:
+		# f['md5'] doesn't have the correct MD5 value, but f['block_list'][0] has
+		# This makes no sense, and I'm not going to change the correct code to adapt its wrong behaviors
+		# --- Code below for reference ---
+		# fmd5 = f['md5']
+		# bl = 'block_list'
+		# if bl in f and f[bl]:
+		# 	fmd5 = f[bl][0]
+		# f['path'][dlen:], PathDictTree('F', size = f['size'], md5 = fmd5))
 		for f in filejs:
 			self.__remote_dir_contents.get(remotepath[rootlen:]).add(
 				f['path'][dlen:], PathDictTree('F', size = f['size'], md5 = f['md5']))
@@ -3570,8 +3609,29 @@ def clean_prog_files(cleanlevel, verbose, configdir = const.ConfigDir):
 
 	return result
 
+def printBaiduBanner():
+	banner ='''
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+Baidu PCS currently gives totally WRONG MD5 hash for remote files, and I AM NOT GOING TO ADAPT TO IT!
+So it if doesn't work, install version '1.6.10' using the following command:
+pip install bypy==1.6.10
+Version 1.6.10 has a workaround for this.
+### Seeking maintainer for this `bypy` project, if you are interested, please create an issue at github, thanks. ###
+----------------------------------------------------------------
+百度云盘返回的MD5全错了，鬼知道他们什么时候会改回来！现在代码是按照MD5值是正确的前提来写的，不会改。
+所以你发现比较功能等不能正确工作时，请安装 1.6.10 版本：
+pip install bypy==1.6.10
+1.6.10版有个临时解决方案。
+### 寻求这个`bypy`项目维护者，有意的话请去github上建issue，谢谢。###
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+'''
+	print(banner)
+
 def main(argv=None): # IGNORE:C0111
 	''' Main Entry '''
+	printBaiduBanner()
 
 	by = None
 	reqres = check_requirements()

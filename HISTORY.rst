@@ -1,6 +1,17 @@
 Version History:
 ~~~~~~~~~~~~~~~~
 
+-  1.6.11: Revert the previous change - Baidu PCS’s behavior is wrong
+   and makes no sense
+
+-  1.6.10: Fix MD5 comparision (thanks to @shenchucheng)
+
+-  1.6.9: Make auth server list dynamic
+
+-  1.6.8: Fix 1000 items limit for downloading
+
+-  1.6.7: Handle update check network exceptions
+
 -  1.6.6: Let it cry when dies, so we can have some trace
 
 -  1.6.5: Fix ``KeyError: u'md5'`` in remote directory walking
